@@ -1,0 +1,12 @@
+node_modules/
+# Local settings and the folders you've shared with the assistant
+config.local.json
+projects.json
+# Your own resumes: only the bundled example is tracked
+resumes/*
+!resumes/example/
+# LaTeX build output
+*.aux
+*.log
+*.out
+*.pdf

@@ -1,0 +1,32 @@
+{
+  "name": "resume-studio",
+  "version": "1.0.0",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "keywords": [
+    "resume",
+    "latex",
+    "claude",
+    "ai",
+    "editor",
+    "claude-code"
+  ],
+  "author": "Shivam Bhardwaj",
+  "license": "MIT",
+  "description": "Live LaTeX resume editor with an AI chat side panel: select a bullet, section or phrase and ask Claude to rewrite it.",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.9.0",
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shivam-a0621/resume-studio.git"
+  }
+}

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Resume Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="chat-pane">
+      <div class="chat-head">
+        <div>
+          <div class="chat-title">Resume assistant</div>
+          <div class="chat-sub">Edits apply live · undo anytime</div>
+        </div>
+        <div class="head-actions">
+          <button id="projectsBtn" class="ghost" title="Folders the assistant can read (read-only)">Projects</button>
+          <button id="newChatBtn" class="ghost" title="Start a new conversation">New chat</button>
+        </div>
+      </div>
+      <div id="messages" class="messages">
+        <div class="empty">
+          <p>Select part of your resume, then tell me what to change.</p>
+          <p class="muted">For example: “quantify this”, “tailor the Experience section to this job description: …”, or “make the skills section shorter”.</p>
+        </div>
+      </div>
+      <div class="composer">
+        <div id="chips" class="chips"></div>
+        <div class="quick" id="quick">
+          <button data-prompt="Make this more impactful: lead with the result and keep the technical detail.">Stronger impact</button>
+          <button data-prompt="Shorten this without losing the key metric or technical detail.">Shorten</button>
+          <button data-prompt="Add more specific technical depth to this (only facts already present or that you ask me about).">More technical</button>
+          <button data-prompt="Fix grammar, tense and consistency in this.">Polish</button>
+        </div>
+        <div class="input-row">
+          <textarea id="input" rows="3" placeholder="Ask for an edit… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button id="sendBtn" class="primary">Send</button>
+        </div>
+      </div>
+    </aside>
+    <div id="splitter" class="splitter" title="Drag to resize · double-click to reset"></div>
+    <section class="doc-pane">
+      <div class="toolbar">
+        <button id="openBtn" title="Open a resume (Ctrl+O)">Open…</button>
+        <span id="docName" class="doc-name">No file open</span>
+        <button id="saveBtn" title="Save (Ctrl+S)">Save</button>
+        <button id="saveAsBtn" title="Save a copy, e.g. acme/Resume_Acme.tex">Save as…</button>
+        <span class="sep"></span>
+        <button id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
+        <button id="redoBtn" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+        <span class="sep"></span>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-view="preview">Preview</button>
+          <button class="tab" data-view="pdf">PDF</button>
+          <button class="tab" data-view="source">Source</button>
+        </div>
+        <span class="spacer"></span>
+        <span id="pageBadge" class="badge">–</span>
+        <span id="dirtyDot" class="dirty" title="Unsaved changes" hidden>●</span>
+      </div>
+
+      <div class="views">
+        <div id="previewView" class="view preview-view">
+          <div class="hint">Click a bullet, heading or section title to select it. Drag across text to select a phrase. Shift-click selects more than one.</div>
+          <div id="emptyDoc" class="empty-doc">
+            <p>No resume open.</p>
+            <button id="emptyOpenBtn" class="primary">Open a resume…</button>
+          </div>
+          <article id="paper" class="paper"></article>
+          <button id="askFloat" class="ask-float" hidden>＋ Add to chat</button>
+        </div>
+        <div id="pdfView" class="view pdf-view" hidden>
+          <iframe id="pdfFrame" title="Compiled PDF"></iframe>
+          <pre id="pdfError" class="pdf-error" hidden></pre>
+        </div>
+        <div id="sourceView" class="view source-view" hidden>
+          <textarea id="source" spellcheck="false"></textarea>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  <dialog id="openDialog" class="open-dialog">
+    <h3>Open a resume</h3>
+    <p class="muted">LaTeX files in <code id="openRoot"></code></p>
+    <ul id="openList" class="open-list"></ul>
+    <div class="dialog-actions">
+      <button id="browseBtn">Browse computer…</button>
+      <input id="fileInput" type="file" accept=".tex" hidden />
+      <span class="spacer"></span>
+      <button id="openCancel" class="ghost">Cancel</button>
+    </div>
+  </dialog>
+  <dialog id="projectsDialog" class="open-dialog">
+    <h3>Project folders</h3>
+    <p class="muted">The assistant can <strong>read</strong> these folders and their git history to see what you built. It can't change anything in them.</p>
+    <ul id="projectList" class="project-list"></ul>
+    <form id="projectForm" class="project-add">
+      <input id="projectInput" placeholder="/home/you/AgentFlow" spellcheck="false" />
+      <button type="submit">Add</button>
+    </form>
+    <p id="projectError" class="project-error" hidden></p>
+    <p id="projectUnsupported" class="muted" hidden>Project access needs the local Claude Code backend. It isn't available when the app uses an API key.</p>
+    <div class="dialog-actions"><span class="spacer"></span><button id="projectsClose" class="primary">Done</button></div>
+  </dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
