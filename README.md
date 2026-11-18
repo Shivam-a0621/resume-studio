@@ -10,7 +10,7 @@ A live LaTeX resume editor with an AI assistant beside it. Click a bullet, an en
 - **Edits apply live.** Claude edits the `.tex` source through exact find-and-replace edits. Each change is highlighted in the preview and listed in the chat. Click a listed change to jump to it, and press Ctrl+Z to undo it.
 - **Stays one page.** The resume recompiles with `pdflatex` after every change, and a badge shows the page count. The assistant also compiles after edits that make the resume longer, and fixes any overflow.
 - **Honest writing rules.** The assistant leads bullets with impact, keeps the technical detail, and never invents numbers. When a stronger bullet needs a metric it doesn't have, it asks you or leaves a `[X%]` placeholder.
-- **Grounded in your real work.** Add a project folder and the assistant can read the code and git history, filtered to your own commits, to suggest claims backed by evidence. Access is read-only.
+- **Grounded in your real work.** Add a project folder and the assistant can read the code and git history, filtered to your own commits, to check your bullets and suggest claims backed by evidence. Access is read-only.
 - **A preview that matches LaTeX.** The preview uses the real Latin Modern fonts and understands the common resume macros, tables (`tabular`, `tabularx`, `\multicolumn`, booktabs rules), horizontal rules, colors, and macros the document defines itself. The **PDF** tab always shows the exact compiled output, and the **Source** tab lets you edit by hand.
 - **Your files, your workflow.** It opens any `.tex` file in your resume folder. **Save as…** creates per-company copies such as `acme/Resume_Acme.tex`. Nothing is written to disk until you save.
 - **Chat history with context.** Chats are saved to disk and survive restarts. Opening a resume reopens its latest chat, and **History** lists earlier ones. Reopening a chat restores the conversation and the assistant's full context, including your selections, earlier edits and what the resume looked like.
@@ -62,7 +62,13 @@ Each chat is saved in `chats/` (git-ignored) with its transcript, the assistant'
 
 ### Let the assistant see your projects
 
-Click **Projects** above the chat and add folders such as `~/code/my-project`. The assistant can read files there (`Read`, `Grep`, `Glob`) and run `git log`, `shortlog`, `show` and `ls-files` in them. It finds your git identity first, so it reports your work rather than your teammates'. Try asking: *"Check my project and list the most impactful things I built, with evidence."* This feature needs the Claude Code backend.
+![The assistant checks a project's code and git history, then grades each claim in a resume bullet](docs/screenshots/project-insights.png)
+
+Click **Projects** above the chat and add folders such as `~/code/my-project`. The assistant can read files there (`Read`, `Grep`, `Glob`) and run `git log`, `shortlog`, `show` and `ls-files` in them. It finds your git identity first, so it reports your work rather than your teammates'. Try asking: *"Check my project and list the most impactful things I built, with evidence."*
+
+In the example above, the assistant checks a resume bullet against the project. It confirms the claims the code supports, flags two that overstate it (a latency figure that's really a p95, and work a teammate did), and suggests a rewrite based only on what it found. This feature needs the Claude Code backend.
+
+<img src="docs/screenshots/projects-dialog.png" alt="Project folders dialog" width="640">
 
 ## Configuration
 

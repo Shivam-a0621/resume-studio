@@ -399,7 +399,8 @@ function renderTranscript(transcript) {
     }
     for (const part of entry.parts ?? []) {
       if (part.type === "text") {
-        const span = document.createElement("span");
+        const span = document.createElement("div");
+        span.className = "md";
         span.innerHTML = miniMarkdown(part.text);
         div.appendChild(span);
       } else if (part.type !== "break") {
@@ -479,9 +480,48 @@ historyEls.btn.addEventListener("click", showHistory);
 historyEls.close.addEventListener("click", () => historyEls.dialog.close());
 historyEls.thisFile.addEventListener("change", showHistory);
 
+// Small Markdown renderer for chat replies: paragraphs, **bold**, `code`,
+// fenced code blocks, tables, headings and lists.
 function miniMarkdown(text) {
-  const escaped = text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
-  return escaped.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  const esc = (t) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  const inline = (t) => esc(t)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+  const cells = (row) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  const lines = text.split("\n");
+  let out = "";
+  for (let i = 0; i < lines.length; ) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      const body = [];
+      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) body.push(lines[i]);
+      i++;
+      out += `<pre class="md-code"><code>${esc(body.join("\n"))}</code></pre>`;
+    } else if (/^\s*\|.*\|\s*$/.test(line)) {
+      const rows = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(lines[i++]);
+      const body = rows.filter((r, k) => !(k === 1 && /^[\s|:-]+$/.test(r)));
+      const [head, ...rest] = body;
+      out += `<table class="md-table"><thead><tr>${cells(head).map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead>`;
+      out += `<tbody>${rest.map((r) => `<tr>${cells(r).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    } else if (/^#{1,4}\s/.test(line)) {
+      out += `<div class="md-h">${inline(line.replace(/^#+\s/, ""))}</div>`;
+      i++;
+    } else if (/^\s*([-*]|\d+\.)\s+/.test(line)) {
+      const ordered = /^\s*\d+\./.test(line);
+      const items = [];
+      while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*]|\d+\.)\s+/, ""));
+      const tag = ordered ? "ol" : "ul";
+      out += `<${tag} class="md-list">${items.map((it) => `<li>${inline(it)}</li>`).join("")}</${tag}>`;
+    } else if (!line.trim()) {
+      out += '<div class="md-gap"></div>';
+      i++;
+    } else {
+      out += `<p class="md-p">${inline(line)}</p>`;
+      i++;
+    }
+  }
+  return out;
 }
 
 function addMessage(role) {
@@ -540,7 +580,8 @@ async function send(text) {
       statusEl?.remove();
       statusEl = null;
       if (!textSpan) {
-        textSpan = document.createElement("span");
+        textSpan = document.createElement("div");
+        textSpan.className = "md";
         textRaw = "";
         bot.insertBefore(textSpan, typing);
       }

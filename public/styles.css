@@ -208,3 +208,16 @@ body.resizing iframe { pointer-events: none; }
 .history-list .none { color: var(--muted); padding: 8px 0; }
 .event.past { cursor: default; }
 .resumed-note { align-self: center; font-size: 12px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 4px; }
+
+/* ---------- Markdown in chat replies ---------- */
+.msg.assistant { white-space: normal; }
+.msg.assistant .md-p { margin: 0; }
+.msg.assistant .md-gap { height: 8px; }
+.msg.assistant .md-h { font-weight: 650; margin: 6px 0 2px; }
+.msg.assistant .md-list { margin: 2px 0; padding-left: 20px; }
+.msg.assistant .md-code { margin: 6px 0; padding: 8px 10px; background: #f3f1ec; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospace, monospace; }
+.msg.assistant code { font-size: 12.5px; background: #f3f1ec; padding: 0 3px; border-radius: 3px; }
+.msg.assistant .md-code code { background: none; padding: 0; }
+.md-table { border-collapse: collapse; margin: 6px 0; font-size: 12.5px; width: 100%; }
+.md-table th, .md-table td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+.md-table th { background: #f3f1ec; font-weight: 600; }
