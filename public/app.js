@@ -119,7 +119,7 @@ function setBadge(kind, text) {
 
 // ---------- files ----------
 
-function loadDocument({ tex, path, name }) {
+function loadDocument({ tex, path, name, restoreChat = true }) {
   state.path = path;
   state.docName = name ?? path;
   state.savedTex = path ? tex : "";
@@ -131,18 +131,19 @@ function loadDocument({ tex, path, name }) {
   els.emptyDoc.hidden = true;
   clearSelections();
   setTex(tex, { record: false });
-  newChat();
+  if (restoreChat && path) restoreLatestChat(path);
+  else if (restoreChat) newChat();
 }
 
 function confirmDiscard() {
   return state.tex === state.savedTex || confirm("You have unsaved changes. Discard them?");
 }
 
-async function openFile(path) {
+async function openFile(path, { restoreChat = true } = {}) {
   const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
   const data = await res.json();
   if (!res.ok) return alert(data.error);
-  loadDocument({ tex: data.tex, path });
+  loadDocument({ tex: data.tex, path, restoreChat });
 }
 
 async function showOpenDialog() {
@@ -363,14 +364,120 @@ function flashRange(at, length) {
 
 // ---------- chat ----------
 
+const EMPTY_CHAT = `<div class="empty"><p>Select part of your resume, then tell me what to change.</p>
+  <p class="muted">For example: “quantify this”, “tailor the Experience section to this job description: …”, or “make the skills section shorter”.</p></div>`;
+
 function newChat() {
   if (state.streaming) return;
-  fetch("/api/chat/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId: state.conversationId }) });
   state.conversationId = crypto.randomUUID();
-  els.messages.innerHTML = `<div class="empty"><p>Select part of your resume, then tell me what to change.</p>
-    <p class="muted">For example: “quantify this”, “tailor the Experience section to this job description: …”, or “make the skills section shorter”.</p></div>`;
+  els.messages.innerHTML = EMPTY_CHAT;
 }
 els.newChatBtn.addEventListener("click", newChat);
+
+// ---------- chat history ----------
+
+const historyEls = {
+  btn: document.getElementById("historyBtn"), dialog: document.getElementById("historyDialog"),
+  list: document.getElementById("historyList"), close: document.getElementById("historyClose"),
+  thisFile: document.getElementById("historyThisFile"),
+};
+
+function renderTranscript(transcript) {
+  els.messages.innerHTML = "";
+  if (!transcript.length) { els.messages.innerHTML = EMPTY_CHAT; return; }
+  for (const entry of transcript) {
+    const div = addMessage(entry.role);
+    if (entry.role === "user") {
+      if (entry.ctx?.length) {
+        const ctx = document.createElement("span");
+        ctx.className = "ctx";
+        ctx.textContent = "📎 " + entry.ctx.map((c) => `${KIND_NAMES[c.kind] ?? c.kind}: ${(c.text || c.label).slice(0, 40)}`).join(" · ");
+        div.appendChild(ctx);
+      }
+      div.appendChild(document.createTextNode(entry.text));
+      continue;
+    }
+    for (const part of entry.parts ?? []) {
+      if (part.type === "text") {
+        const span = document.createElement("span");
+        span.innerHTML = miniMarkdown(part.text);
+        div.appendChild(span);
+      } else if (part.type !== "break") {
+        const ev = document.createElement("span");
+        ev.className = `event past ${part.type === "error" ? "err" : part.type === "layout" ? "layout" : ""}`;
+        ev.textContent = part.type === "edit" ? `✎ ${part.summary}`
+          : part.type === "layout" ? (part.ok ? `Layout check: ${part.pages} page${part.pages === 1 ? "" : "s"}${part.pages === 1 ? " ✓" : ""}` : "Layout check: LaTeX errors")
+          : part.message;
+        div.appendChild(ev);
+      }
+    }
+  }
+  const note = document.createElement("div");
+  note.className = "resumed-note";
+  note.textContent = "Earlier conversation. Keep chatting to continue it with full context.";
+  els.messages.appendChild(note);
+  scrollChat();
+}
+
+async function openChat(id) {
+  if (state.streaming) return;
+  const res = await fetch(`/api/chats/${id}`);
+  const chat = await res.json();
+  if (!res.ok) return alert(chat.error);
+  if (chat.file && chat.file !== state.path) {
+    if (!confirmDiscard()) return;
+    await openFile(chat.file, { restoreChat: false });
+  }
+  state.conversationId = chat.id;
+  renderTranscript(chat.transcript);
+}
+
+// Reopen the most recent chat for a file, if there is one.
+async function restoreLatestChat(path) {
+  const { chats } = await (await fetch("/api/chats")).json();
+  const latest = chats.find((c) => c.file === path);
+  if (latest) await openChat(latest.id);
+  else newChat();
+}
+
+const timeAgo = (ms) => {
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return new Date(ms).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+};
+
+async function showHistory() {
+  const { chats } = await (await fetch("/api/chats")).json();
+  const onlyThisFile = historyEls.thisFile.checked && state.path;
+  const shown = onlyThisFile ? chats.filter((c) => c.file === state.path) : chats;
+  historyEls.list.innerHTML = shown.length ? "" : `<li class="none">${onlyThisFile ? "No earlier chats for this resume." : "No saved chats yet."}</li>`;
+  for (const chat of shown) {
+    const li = document.createElement("li");
+    li.innerHTML = `<button class="h-open"><span class="h-title"></span><span class="h-meta"></span></button><button class="h-del" title="Delete chat">×</button>`;
+    li.querySelector(".h-title").textContent = chat.title || "(untitled)";
+    li.querySelector(".h-meta").textContent = `${chat.file ?? "unsaved file"} · ${chat.turns} message${chat.turns === 1 ? "" : "s"} · ${timeAgo(chat.updatedAt)}`;
+    if (chat.id === state.conversationId) li.classList.add("current");
+    li.querySelector(".h-open").addEventListener("click", async () => {
+      historyEls.dialog.close();
+      await openChat(chat.id);
+    });
+    li.querySelector(".h-del").addEventListener("click", async () => {
+      if (!confirm(`Delete the chat “${chat.title}”? This can't be undone.`)) return;
+      const res = await fetch(`/api/chats/${chat.id}`, { method: "DELETE" });
+      if (!res.ok) return alert((await res.json()).error);
+      if (chat.id === state.conversationId) newChat();
+      showHistory();
+    });
+    historyEls.list.appendChild(li);
+  }
+  if (!historyEls.dialog.open) historyEls.dialog.showModal();
+}
+historyEls.btn.addEventListener("click", showHistory);
+historyEls.close.addEventListener("click", () => historyEls.dialog.close());
+historyEls.thisFile.addEventListener("change", showHistory);
 
 function miniMarkdown(text) {
   const escaped = text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
@@ -467,7 +574,7 @@ async function send(text) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversationId: state.conversationId, tex: state.tex, message, selections }),
+      body: JSON.stringify({ conversationId: state.conversationId, file: state.path, tex: state.tex, message, selections }),
     });
     if (!res.ok || !res.body) {
       const data = await res.json().catch(() => ({}));
@@ -638,5 +745,5 @@ new ResizeObserver(fitPaper).observe(els.previewView);
 updateButtons();
 showOpenDialog();
 fetch("/api/info").then((r) => r.json()).then(({ backend }) => {
-  document.querySelector(".chat-sub").textContent = `${backend} · edits apply live · undo anytime`;
+  document.querySelector(".chat-sub").textContent = backend;
 });

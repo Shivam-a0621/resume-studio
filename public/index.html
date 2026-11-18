@@ -15,6 +15,7 @@
           <div class="chat-sub">Edits apply live · undo anytime</div>
         </div>
         <div class="head-actions">
+          <button id="historyBtn" class="ghost" title="Earlier chats">History</button>
           <button id="projectsBtn" class="ghost" title="Folders the assistant can read (read-only)">Projects</button>
           <button id="newChatBtn" class="ghost" title="Start a new conversation">New chat</button>
         </div>
@@ -91,6 +92,12 @@
       <span class="spacer"></span>
       <button id="openCancel" class="ghost">Cancel</button>
     </div>
+  </dialog>
+  <dialog id="historyDialog" class="open-dialog">
+    <h3>Earlier chats</h3>
+    <label class="muted history-filter"><input id="historyThisFile" type="checkbox" checked /> Only chats for the open resume</label>
+    <ul id="historyList" class="history-list"></ul>
+    <div class="dialog-actions"><span class="spacer"></span><button id="historyClose" class="primary">Close</button></div>
   </dialog>
   <dialog id="projectsDialog" class="open-dialog">
     <h3>Project folders</h3>

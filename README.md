@@ -13,6 +13,7 @@ A live LaTeX resume editor with an AI assistant beside it. Click a bullet, an en
 - **Grounded in your real work.** Add a project folder and the assistant can read the code and git history, filtered to your own commits, to suggest claims backed by evidence. Access is read-only.
 - **A preview that matches LaTeX.** The preview uses the real Latin Modern fonts and understands the common resume macros, tables (`tabular`, `tabularx`, `\multicolumn`, booktabs rules), horizontal rules, colors, and macros the document defines itself. The **PDF** tab always shows the exact compiled output, and the **Source** tab lets you edit by hand.
 - **Your files, your workflow.** It opens any `.tex` file in your resume folder. **Save as…** creates per-company copies such as `acme/Resume_Acme.tex`. Nothing is written to disk until you save.
+- **Chat history with context.** Chats are saved to disk and survive restarts. Opening a resume reopens its latest chat, and **History** lists earlier ones. Reopening a chat restores the conversation and the assistant's full context, including your selections, earlier edits and what the resume looked like.
 - **Resizable layout.** Drag the divider between the chat and the resume, and the page scales to fit.
 
 | Exact PDF output | Open any resume in the folder |
@@ -55,6 +56,10 @@ Then open <http://localhost:4321>. It opens the bundled example resume in `resum
 | Ctrl+O | Open a resume |
 | Esc | Clear the selection |
 
+### Chat history
+
+Each chat is saved in `chats/` (git-ignored) with its transcript, the assistant's session, and the resume text the assistant last saw. **History** above the chat lists earlier chats, for the open resume or for all resumes. Click one to continue it; if it belongs to another resume, that file opens too. **New chat** starts fresh without deleting anything, and **×** in History deletes a chat. If you edited the resume since the chat's last message, the assistant is told so and re-reads it.
+
 ### Let the assistant see your projects
 
 Click **Projects** above the chat and add folders such as `~/code/my-project`. The assistant can read files there (`Read`, `Grep`, `Glob`) and run `git log`, `shortlog`, `show` and `ls-files` in them. It finds your git identity first, so it reports your work rather than your teammates'. Try asking: *"Check my project and list the most impactful things I built, with evidence."* This feature needs the Claude Code backend.
@@ -70,6 +75,7 @@ Click **Projects** above the chat and add folders such as `~/code/my-project`. T
 | `RESUME_MODEL` | `claude-opus-5-5` for the API; Claude Code's own default otherwise | Model override. |
 | `CLAUDE_BIN` | `claude` | Path to the Claude Code CLI. |
 | `RESUME_PROJECTS_FILE` | `projects.json` | Where the list of shared project folders is stored. |
+| `RESUME_CHATS_DIR` | `chats/` | Where saved chats and their working copies live. |
 
 You can also put settings in a git-ignored `config.local.json` next to `server.mjs`:
 
@@ -89,7 +95,7 @@ browser (public/)                          server (server.mjs)
 └───────────────┴──────────────────┘                      │
                                       ┌───────────────────┴───────────────────┐
                                       │ Claude Code CLI (default)             │
-                                      │   edits a temp copy of resume.tex,    │
+                                      │   edits the chat's resume.tex copy,   │
                                       │   streamed back edit by edit          │
                                       │ or the Claude API (@anthropic-ai/sdk) │
                                       │   edit_resume + check_layout tools    │
@@ -97,7 +103,7 @@ browser (public/)                          server (server.mjs)
 ```
 
 - **Preview and selection** (`public/latex.js`): a small LaTeX-to-HTML renderer. Every bullet, entry, section, block and table row it draws records the exact source range it came from, so a click maps to precise LaTeX that's sent to the assistant with your message.
-- **Claude Code backend** (default): each message runs `claude -p` with streaming JSON output in a per-conversation temp folder that holds a copy of `resume.tex`. The server watches its tool calls, re-reads the file after every `Edit`, and streams each change to the browser. Follow-up messages resume the same session.
+- **Claude Code backend** (default): each message runs `claude -p` with streaming JSON output in the chat's own folder under `chats/`, which holds a copy of `resume.tex`. The server watches its tool calls, re-reads the file after every `Edit`, and streams each change to the browser. Follow-up messages resume the same session.
 - **API backend**: a streaming tool-use loop on the Claude API with two tools. `edit_resume` makes an exact, unique find-and-replace, and `check_layout` compiles and reports the page count and errors. It uses adaptive thinking, prompt caching, and server-side refusal fallback.
 - **Compile**: `pdflatex -no-shell-escape` runs in a throwaway temp folder, so build files never land next to your resumes.
 
@@ -107,9 +113,9 @@ The assistant runs with an explicit allowlist in Claude Code's `dontAsk` permiss
 
 | Allowed | Scope |
 | --- | --- |
-| Edit | only the temp copy of `resume.tex` |
-| Read, Grep, Glob | the temp folder and the project folders you added |
-| `pdflatex` | the temp folder |
+| Edit | only the chat's working copy of `resume.tex` |
+| Read, Grep, Glob | the chat's folder and the project folders you added |
+| `pdflatex` | the chat's folder |
 | `git -C <folder> log / shortlog / show / ls-files / config user.*` | project folders you added |
 
 It can't edit your project folders, read files outside them, or run other shell commands. Your real `.tex` files change only when you press **Save**. The web server binds to localhost only and rejects file paths outside the resume folder.
@@ -117,7 +123,7 @@ It can't edit your project folders, read files outside them, or run other shell 
 ## Limitations
 
 - The preview is an approximation built for resume-style documents. Unusual packages or heavy custom macros may render roughly in the **Preview** tab. The **PDF** tab is always exact.
-- Chat history is kept in memory and resets when the server restarts.
+- A saved chat continues on the AI backend it started with. After switching between Claude Code and the API, start a new chat.
 - Highly styled tables and multi-column grids can be harder for applicant tracking systems (ATS) to read than plain bullets.
 
 ## Project structure
@@ -125,7 +131,7 @@ It can't edit your project folders, read files outside them, or run other shell 
 ```
 server.mjs              Express server: files, compile, chat (Claude Code CLI or Claude API)
 public/index.html       App shell
-public/app.js           UI: selection, chat streaming, undo/redo, files, layout
+public/app.js           UI: selection, chat streaming and history, undo/redo, files, layout
 public/latex.js         LaTeX → HTML renderer with source mapping
 public/styles.css       Styles
 resumes/example/        Example resume (fictional)

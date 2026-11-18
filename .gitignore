@@ -10,3 +10,4 @@ resumes/*
 *.log
 *.out
 *.pdf
+chats/

@@ -265,9 +265,76 @@ const TOOLS = [
   },
 ];
 
-// Conversations live in memory. Each keeps its message history (append-only)
-// and the resume source the model last saw.
+// Chats are saved to chats/<id>.json so they survive restarts and can be
+// reopened. Each keeps the model-side history (append-only), the resume
+// source the model last saw, the Claude Code session, and a transcript for the UI.
+const CHATS_DIR = path.resolve(here, process.env.RESUME_CHATS_DIR ?? "chats");
 const conversations = new Map();
+const CHAT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const chatFile = (id) => path.join(CHATS_DIR, `${id}.json`);
+
+async function getConversation(id, file) {
+  if (conversations.has(id)) return conversations.get(id);
+  const saved = await fs.readFile(chatFile(id), "utf8").then(JSON.parse, () => null);
+  const convo = {
+    id,
+    file: saved?.file ?? file ?? null,
+    title: saved?.title ?? "",
+    createdAt: saved?.createdAt ?? Date.now(),
+    updatedAt: saved?.updatedAt ?? Date.now(),
+    provider: saved?.provider ?? PROVIDER,
+    messages: saved?.messages ?? [],
+    seenTex: saved?.seenTex ?? null,
+    sessionId: saved?.sessionId,
+    sessionStarted: saved?.sessionStarted ?? false,
+    transcript: saved?.transcript ?? [],
+    // A stable folder, so Claude Code can resume the session after a restart.
+    workDir: path.join(CHATS_DIR, id),
+    busy: false,
+  };
+  conversations.set(id, convo);
+  return convo;
+}
+
+async function saveConversation(convo) {
+  convo.updatedAt = Date.now();
+  const { busy, workDir, ...data } = convo;
+  await fs.mkdir(CHATS_DIR, { recursive: true });
+  await fs.writeFile(chatFile(convo.id), JSON.stringify(data));
+}
+
+app.get("/api/chats", async (_req, res) => {
+  const names = await fs.readdir(CHATS_DIR).catch(() => []);
+  const chats = [];
+  for (const name of names.filter((n) => n.endsWith(".json"))) {
+    const data = await fs.readFile(path.join(CHATS_DIR, name), "utf8").then(JSON.parse, () => null);
+    if (!data?.transcript?.length) continue;
+    chats.push({
+      id: data.id, title: data.title, file: data.file, updatedAt: data.updatedAt,
+      turns: data.transcript.filter((t) => t.role === "user").length,
+    });
+  }
+  chats.sort((a, b) => b.updatedAt - a.updatedAt);
+  res.json({ chats });
+});
+
+app.get("/api/chats/:id", async (req, res) => {
+  if (!CHAT_ID.test(req.params.id)) return res.status(400).json({ error: "Bad chat id" });
+  const data = await fs.readFile(chatFile(req.params.id), "utf8").then(JSON.parse, () => null);
+  if (!data) return res.status(404).json({ error: "Chat not found" });
+  res.json({ id: data.id, title: data.title, file: data.file, updatedAt: data.updatedAt, transcript: data.transcript });
+});
+
+app.delete("/api/chats/:id", async (req, res) => {
+  const id = req.params.id;
+  if (!CHAT_ID.test(id)) return res.status(400).json({ error: "Bad chat id" });
+  if (conversations.get(id)?.busy) return res.status(409).json({ error: "That chat is replying right now" });
+  conversations.delete(id);
+  await fs.rm(chatFile(id), { force: true });
+  await fs.rm(path.join(CHATS_DIR, id), { recursive: true, force: true });
+  res.json({ ok: true });
+});
 
 function countOccurrences(haystack, needle) {
   let count = 0;
@@ -301,7 +368,8 @@ function buildUserContent(convo, tex, selections, message, { inline = true } = {
 }
 
 const ChatBody = z.object({
-  conversationId: z.string().min(1),
+  conversationId: z.string().regex(CHAT_ID),
+  file: z.string().nullable().optional(),
   tex: z.string(),
   message: z.string().min(1),
   selections: z
@@ -312,15 +380,41 @@ const ChatBody = z.object({
 app.post("/api/chat", async (req, res) => {
   const parsedBody = ChatBody.safeParse(req.body);
   if (!parsedBody.success) return res.status(400).json({ error: "Bad request" });
-  const { conversationId, tex, message, selections } = parsedBody.data;
+  const { conversationId, tex, message, selections, file } = parsedBody.data;
 
-  if (!conversations.has(conversationId)) conversations.set(conversationId, { messages: [], seenTex: null, busy: false });
-  const convo = conversations.get(conversationId);
+  const convo = await getConversation(conversationId, file);
   if (convo.busy) return res.status(409).json({ error: "A reply is already in progress" });
+  if (convo.provider !== PROVIDER) {
+    return res.status(409).json({ error: "This chat was started with a different AI backend. Start a new chat." });
+  }
   convo.busy = true;
+  if (file) convo.file = file;
+  if (!convo.title) convo.title = message.replace(/\s+/g, " ").slice(0, 80);
+
+  // Record what the user sees, so the chat can be reopened later.
+  convo.transcript.push({ role: "user", text: message, ctx: selections.map(({ kind, label, text }) => ({ kind, label, text })), at: Date.now() });
+  const reply = { role: "assistant", parts: [], at: Date.now() };
+  convo.transcript.push(reply);
+  const record = (event, data) => {
+    const last = reply.parts.at(-1);
+    if (event === "text") {
+      if (last?.type === "text") last.text += data.delta;
+      else reply.parts.push({ type: "text", text: data.delta });
+    } else if (event === "edit") reply.parts.push({ type: "edit", summary: data.summary });
+    else if (event === "layout") reply.parts.push({ type: "layout", pages: data.pages, ok: data.ok });
+    else if (event === "error") reply.parts.push({ type: "error", message: data.message });
+    else if (event === "turn" && last?.type === "text") reply.parts.push({ type: "break" });
+    else if (event === "done") {
+      if (!reply.parts.length) reply.parts.push({ type: "text", text: "(no reply)" });
+      return saveConversation(convo).catch((err) => console.error("Couldn't save chat:", err.message));
+    }
+  };
 
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const send = (event, data) => {
+    record(event, data);
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
 
   const abort = new AbortController();
   res.on("close", () => abort.abort());
@@ -479,7 +573,7 @@ function describeEdit(oldText, newText) {
 const TOOL_STATUS = { Read: "Reading the resume…", Edit: "Editing…", Bash: "Checking layout…" };
 
 async function runClaudeCodeTurn({ convo, tex, selections, message, send, signal }) {
-  convo.workDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "resume-studio-chat-"));
+  await fs.mkdir(convo.workDir, { recursive: true });
   convo.sessionId ??= crypto.randomUUID();
   const file = path.join(convo.workDir, "resume.tex");
   await fs.writeFile(file, tex, "utf8");
@@ -577,12 +671,6 @@ async function runClaudeCodeTurn({ convo, tex, selections, message, send, signal
   throw new Error(detail + hint);
 }
 
-app.post("/api/chat/reset", (req, res) => {
-  const convo = conversations.get(req.body?.conversationId);
-  if (convo?.workDir) fs.rm(convo.workDir, { recursive: true, force: true }).catch(() => {});
-  conversations.delete(req.body?.conversationId);
-  res.json({ ok: true });
-});
 
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`Resume Studio running at http://localhost:${PORT}`);
