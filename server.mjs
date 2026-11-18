@@ -355,6 +355,22 @@ app.post("/api/compile", async (req, res) => {
   res.type("application/pdf").send(result.pdf);
 });
 
+// Compiles the resume and writes the PDF next to its .tex file.
+app.post("/api/pdf/save", async (req, res) => {
+  const { path: relPath, tex } = req.body ?? {};
+  try {
+    const texPath = resolveTexPath(relPath);
+    if (typeof tex !== "string") throw new Error("Missing tex");
+    const result = await compileTex(tex);
+    if (!result.ok) return res.status(422).json({ error: `The resume doesn't compile:\n${result.errors || "pdflatex failed"}` });
+    const pdfPath = texPath.replace(/\.tex$/, ".pdf");
+    await fs.writeFile(pdfPath, result.pdf);
+    res.json({ ok: true, path: path.relative(RESUME_ROOT, pdfPath), pages: result.pages });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ---------- chat ----------
 
 const TOOL_GUIDANCE = {

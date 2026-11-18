@@ -14,6 +14,7 @@ A live LaTeX resume editor with an AI assistant beside it. Click a bullet, an en
 - **Grounded in your real work.** Add a project folder and the assistant can read the code and git history, filtered to your own commits, to check your bullets and suggest claims backed by evidence. Access is read-only.
 - **A preview that matches LaTeX.** The preview uses the real Latin Modern fonts and understands the common resume macros, tables (`tabular`, `tabularx`, `\multicolumn`, booktabs rules), horizontal rules, colors, and macros the document defines itself. The **PDF** tab always shows the exact compiled output, and the **Source** tab lets you edit by hand.
 - **Your files, your workflow.** It opens any `.tex` file in your resume folder. **Save as…** creates per-company copies such as `acme/Resume_Acme.tex`. Nothing is written to disk until you save.
+- **Export the PDF.** **PDF ▾** downloads the compiled PDF or saves it next to the `.tex` (e.g. `acme/Resume_Acme.pdf`). If the `.tex` has unsaved edits, it offers to save those too, so the two files match.
 - **Chat history with context.** Chats are saved to disk and survive restarts. Opening a resume reopens its latest chat, and **History** lists earlier ones. Reopening a chat restores the conversation and the assistant's full context, including your selections, earlier edits and what the resume looked like.
 - **Resizable layout.** Drag the divider between the chat and the resume, and the page scales to fit.
 
@@ -49,6 +50,7 @@ Then open <http://localhost:4321>. It opens the bundled example resume in `resum
 2. **Select** what to change: click a bullet, entry heading, section title or table row, or highlight a phrase and press **＋ Add to chat**.
 3. **Ask** in the chat, or use a quick action: *Stronger impact*, *Shorten*, *More technical*, *Polish*. For example, "tailor the Experience section to this job description: …".
 4. **Review** the highlighted changes, then undo or keep them, and press **Save** (Ctrl+S) or **Save as…**.
+5. **Export** with **PDF ▾**: **Download PDF** (Ctrl+P) or **Save PDF to resume folder**.
 
 | Shortcut | Action |
 | --- | --- |
@@ -56,6 +58,7 @@ Then open <http://localhost:4321>. It opens the bundled example resume in `resum
 | Ctrl+Z, Ctrl+Shift+Z | Undo / redo (outside text fields) |
 | Ctrl+S | Save |
 | Ctrl+O | Open a resume |
+| Ctrl+P | Download the PDF |
 | Esc | Clear the selection |
 
 ### Chat history

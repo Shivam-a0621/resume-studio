@@ -48,6 +48,13 @@
         <span id="docName" class="doc-name">No file open</span>
         <button id="saveBtn" title="Save (Ctrl+S)">Save</button>
         <button id="saveAsBtn" title="Save a copy, e.g. acme/Resume_Acme.tex">Save as…</button>
+        <div class="menu-wrap">
+          <button id="pdfMenuBtn" title="Download or save the compiled PDF">PDF ▾</button>
+          <div id="pdfMenu" class="menu" hidden>
+            <button id="downloadPdfBtn">Download PDF</button>
+            <button id="savePdfBtn">Save PDF to resume folder</button>
+          </div>
+        </div>
         <span class="sep"></span>
         <button id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
         <button id="redoBtn" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
@@ -162,6 +169,7 @@
     <p id="projectUnsupported" class="muted" hidden>Project access works only with the <strong>Claude Code</strong> provider. Switch to it in Settings to use project folders.</p>
     <div class="dialog-actions"><span class="spacer"></span><button id="projectsClose" class="primary">Done</button></div>
   </dialog>
+  <div id="toast" class="toast" hidden></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

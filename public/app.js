@@ -89,6 +89,7 @@ function scheduleCompile() {
 async function compile() {
   if (!state.tex) return;
   const seq = ++compileSeq;
+  const texAtStart = state.tex;
   setBadge("busy", "compiling…");
   try {
     const res = await fetch("/api/compile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tex: state.tex }) });
@@ -105,6 +106,7 @@ async function compile() {
     setBadge(pages === 1 ? "ok" : "warn", pages === 1 ? "1 page ✓" : `${pages} pages`);
     if (state.pdfUrl) URL.revokeObjectURL(state.pdfUrl);
     state.pdfUrl = URL.createObjectURL(await res.blob());
+    state.pdfTex = texAtStart;
     els.pdfError.hidden = true;
     els.pdfFrame.hidden = false;
     if (state.view === "pdf") els.pdfFrame.src = state.pdfUrl + "#toolbar=0&view=FitH";
@@ -210,6 +212,66 @@ els.fileInput.addEventListener("change", async () => {
 });
 els.saveBtn.addEventListener("click", () => (state.path ? saveFile(state.path, true) : saveAs()));
 els.saveAsBtn.addEventListener("click", saveAs);
+// ---------- PDF: download or save next to the .tex ----------
+
+const pdfMenu = document.getElementById("pdfMenu");
+const toastEl = document.getElementById("toast");
+let toastTimer = null;
+function toast(text, { error = false, ms = 3500 } = {}) {
+  toastEl.textContent = text;
+  toastEl.className = `toast${error ? " err" : ""}`;
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toastEl.hidden = true), ms);
+}
+
+document.getElementById("pdfMenuBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  pdfMenu.hidden = !pdfMenu.hidden;
+  document.getElementById("savePdfBtn").disabled = !state.path;
+  document.getElementById("savePdfBtn").title = state.path ? `Saves ${state.path.replace(/\.tex$/, ".pdf")}` : "Save the .tex into the resume folder first";
+});
+document.addEventListener("click", () => (pdfMenu.hidden = true));
+
+const pdfName = () => `${(state.path ?? state.docName ?? "resume").split("/").pop().replace(/\.tex$/, "")}.pdf`;
+
+// A PDF of exactly what's on screen: reuse the latest build if it's current.
+async function currentPdfBlob() {
+  if (state.pdfUrl && state.pdfTex === state.tex) return (await fetch(state.pdfUrl)).blob();
+  const res = await fetch("/api/compile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tex: state.tex }) });
+  if (!res.ok) throw new Error((await res.json()).error || "pdflatex failed");
+  return res.blob();
+}
+
+document.getElementById("downloadPdfBtn").addEventListener("click", async () => {
+  pdfMenu.hidden = true;
+  if (!state.tex) return toast("Open a resume first.", { error: true });
+  try {
+    const url = URL.createObjectURL(await currentPdfBlob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: pdfName() });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast(`Downloaded ${pdfName()}`);
+  } catch (err) {
+    toast(`Couldn't build the PDF:\n${err.message}`, { error: true, ms: 7000 });
+  }
+});
+
+document.getElementById("savePdfBtn").addEventListener("click", async () => {
+  pdfMenu.hidden = true;
+  if (!state.path) return;
+  // Keep the .tex and the PDF in step: offer to save unsaved edits too.
+  if (state.tex !== state.savedTex && confirm("The .tex has unsaved changes. Save it too, so the .tex and PDF match?")) {
+    if (!(await saveFile(state.path, true))) return;
+  }
+  const res = await fetch("/api/pdf/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: state.path, tex: state.tex }) });
+  const data = await res.json();
+  if (!res.ok) return toast(data.error, { error: true, ms: 7000 });
+  toast(`Saved ${data.path} (${data.pages} page${data.pages === 1 ? "" : "s"})`);
+});
+
 els.undoBtn.addEventListener("click", undo);
 els.redoBtn.addEventListener("click", redo);
 
@@ -675,6 +737,11 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (!state.path) saveAs();
     else if (state.tex !== state.savedTex) saveFile(state.path, true);
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "p" && state.tex) {
+    e.preventDefault();
+    document.getElementById("downloadPdfBtn").click();
     return;
   }
   if (mod && e.key.toLowerCase() === "o") {
