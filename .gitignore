@@ -11,3 +11,4 @@ resumes/*
 *.out
 *.pdf
 chats/
+settings.local.json

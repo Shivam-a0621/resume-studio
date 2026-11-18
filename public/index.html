@@ -16,6 +16,7 @@
         </div>
         <div class="head-actions">
           <button id="historyBtn" class="ghost" title="Earlier chats">History</button>
+          <button id="settingsBtn" class="ghost" title="AI provider, API keys and model">Settings</button>
           <button id="projectsBtn" class="ghost" title="Folders the assistant can read (read-only)">Projects</button>
           <button id="newChatBtn" class="ghost" title="Start a new conversation">New chat</button>
         </div>
@@ -93,6 +94,56 @@
       <button id="openCancel" class="ghost">Cancel</button>
     </div>
   </dialog>
+  <dialog id="settingsDialog" class="open-dialog settings-dialog">
+    <h3>Settings</h3>
+    <p class="muted">Choose which AI edits your resume. API keys are saved on this computer only (in <code>settings.local.json</code>, which isn't committed) and are never sent back to the browser.</p>
+    <div class="provider-grid" id="providerGrid">
+      <label><input type="radio" name="provider" value="claude-code" /><b>Claude Code</b><small>Your local Claude login. No key needed. Can read project folders.</small></label>
+      <label><input type="radio" name="provider" value="anthropic" /><b>Anthropic API</b><small>Claude models with an API key</small></label>
+      <label><input type="radio" name="provider" value="openai" /><b>OpenAI</b><small>GPT and o-series models</small></label>
+      <label><input type="radio" name="provider" value="azure" /><b>Azure OpenAI</b><small>Your Azure deployment</small></label>
+      <label><input type="radio" name="provider" value="gemini" /><b>Google Gemini</b><small>Gemini API key from AI Studio</small></label>
+      <label><input type="radio" name="provider" value="custom" /><b>OpenAI-compatible</b><small>Ollama, OpenRouter, LM Studio, vLLM…</small></label>
+    </div>
+
+    <div class="prov-fields" data-for="claude-code">
+      <label class="field"><span>Model <em>(optional)</em></span><input data-provider="claude-code" data-field="model" placeholder="Leave blank for Claude Code's default, or e.g. sonnet / opus" spellcheck="false" /></label>
+    </div>
+    <div class="prov-fields" data-for="anthropic">
+      <label class="field"><span>API key</span><span class="key-row"><input type="password" data-provider="anthropic" data-field="apiKey" autocomplete="off" spellcheck="false" /><button type="button" class="link clear-key" data-provider="anthropic">Clear</button></span></label>
+      <label class="field"><span>Model</span><span class="key-row"><input data-provider="anthropic" data-field="model" list="models-anthropic" placeholder="claude-opus-5-5" spellcheck="false" /><button type="button" class="load-models" data-provider="anthropic">Load models</button></span><datalist id="models-anthropic"></datalist></label>
+    </div>
+    <div class="prov-fields" data-for="openai">
+      <label class="field"><span>API key</span><span class="key-row"><input type="password" data-provider="openai" data-field="apiKey" autocomplete="off" spellcheck="false" /><button type="button" class="link clear-key" data-provider="openai">Clear</button></span></label>
+      <label class="field"><span>Model</span><span class="key-row"><input data-provider="openai" data-field="model" list="models-openai" placeholder="Load models, then pick one" spellcheck="false" /><button type="button" class="load-models" data-provider="openai">Load models</button></span><datalist id="models-openai"></datalist></label>
+    </div>
+    <div class="prov-fields" data-for="azure">
+      <label class="field"><span>Endpoint</span><input data-provider="azure" data-field="endpoint" placeholder="https://your-resource.openai.azure.com" spellcheck="false" /></label>
+      <label class="field"><span>API key</span><span class="key-row"><input type="password" data-provider="azure" data-field="apiKey" autocomplete="off" spellcheck="false" /><button type="button" class="link clear-key" data-provider="azure">Clear</button></span></label>
+      <label class="field"><span>Deployment name</span><input data-provider="azure" data-field="deployment" placeholder="The name you gave the model deployment" spellcheck="false" /></label>
+      <label class="field"><span>API version</span><input data-provider="azure" data-field="apiVersion" placeholder="As shown in your Azure portal, e.g. 2024-10-21" spellcheck="false" /></label>
+    </div>
+    <div class="prov-fields" data-for="gemini">
+      <label class="field"><span>API key</span><span class="key-row"><input type="password" data-provider="gemini" data-field="apiKey" autocomplete="off" spellcheck="false" /><button type="button" class="link clear-key" data-provider="gemini">Clear</button></span></label>
+      <label class="field"><span>Model</span><span class="key-row"><input data-provider="gemini" data-field="model" list="models-gemini" placeholder="Load models, then pick one" spellcheck="false" /><button type="button" class="load-models" data-provider="gemini">Load models</button></span><datalist id="models-gemini"></datalist></label>
+    </div>
+    <div class="prov-fields" data-for="custom">
+      <label class="field"><span>Base URL</span><input data-provider="custom" data-field="baseURL" placeholder="http://localhost:11434/v1 (Ollama) or https://openrouter.ai/api/v1" spellcheck="false" /></label>
+      <label class="field"><span>API key <em>(if the server needs one)</em></span><span class="key-row"><input type="password" data-provider="custom" data-field="apiKey" autocomplete="off" spellcheck="false" /><button type="button" class="link clear-key" data-provider="custom">Clear</button></span></label>
+      <label class="field"><span>Model</span><span class="key-row"><input data-provider="custom" data-field="model" list="models-custom" placeholder="Load models, then pick one" spellcheck="false" /><button type="button" class="load-models" data-provider="custom">Load models</button></span><datalist id="models-custom"></datalist></label>
+    </div>
+    <label class="field effort-field"><span>Effort <em>(Claude only)</em></span>
+      <select id="effortSelect"><option value="low">Low: fastest</option><option value="medium">Medium</option><option value="high">High: more careful</option><option value="xhigh">Extra high</option><option value="max">Max: slowest</option></select>
+    </label>
+    <p class="muted provider-note" id="providerNote"></p>
+    <p id="settingsStatus" class="settings-status" hidden></p>
+    <div class="dialog-actions">
+      <button id="testSettings">Test connection</button>
+      <span class="spacer"></span>
+      <button id="settingsCancel" class="ghost">Cancel</button>
+      <button id="settingsSave" class="primary">Save</button>
+    </div>
+  </dialog>
   <dialog id="historyDialog" class="open-dialog">
     <h3>Earlier chats</h3>
     <label class="muted history-filter"><input id="historyThisFile" type="checkbox" checked /> Only chats for the open resume</label>
@@ -108,7 +159,7 @@
       <button type="submit">Add</button>
     </form>
     <p id="projectError" class="project-error" hidden></p>
-    <p id="projectUnsupported" class="muted" hidden>Project access needs the local Claude Code backend. It isn't available when the app uses an API key.</p>
+    <p id="projectUnsupported" class="muted" hidden>Project access works only with the <strong>Claude Code</strong> provider. Switch to it in Settings to use project folders.</p>
     <div class="dialog-actions"><span class="spacer"></span><button id="projectsClose" class="primary">Done</button></div>
   </dialog>
   <script type="module" src="app.js"></script>

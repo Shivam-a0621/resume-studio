@@ -728,18 +728,139 @@ async function saveProjects(next) {
   renderProjects();
   return true;
 }
-fetch("/api/projects").then((r) => r.json()).then((data) => {
+async function refreshProjects() {
+  const data = await (await fetch("/api/projects")).json();
   projects = data.projects;
   projectEls.unsupported.hidden = data.supported;
   projectEls.form.hidden = !data.supported;
   renderProjects();
-});
+}
+refreshProjects();
 projectEls.btn.addEventListener("click", () => { projectEls.error.hidden = true; projectEls.dialog.showModal(); projectEls.input.focus(); });
 projectEls.close.addEventListener("click", () => projectEls.dialog.close());
 projectEls.form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const dir = projectEls.input.value.trim();
   if (dir && (await saveProjects([...projects, dir]))) projectEls.input.value = "";
+});
+
+// ---------- settings: AI provider, keys, model ----------
+
+const settingsEls = {
+  btn: document.getElementById("settingsBtn"), dialog: document.getElementById("settingsDialog"),
+  grid: document.getElementById("providerGrid"), effort: document.getElementById("effortSelect"),
+  note: document.getElementById("providerNote"), status: document.getElementById("settingsStatus"),
+  test: document.getElementById("testSettings"), save: document.getElementById("settingsSave"),
+  cancel: document.getElementById("settingsCancel"),
+};
+const fieldInputs = () => [...settingsEls.dialog.querySelectorAll("[data-provider][data-field]")];
+let savedProvider = null;
+let clearedKeys = new Set();
+
+const PROVIDER_NOTES = {
+  "claude-code": "Uses the Claude Code CLI on this computer and your existing login. This is the only option that can read your project folders.",
+  anthropic: "Get a key at console.anthropic.com. If you leave the key blank, the ANTHROPIC_API_KEY environment variable is used.",
+  openai: "Get a key at platform.openai.com.",
+  azure: "Copy the endpoint and key from your Azure OpenAI resource. Use the deployment name, not the model name.",
+  gemini: "Get a key at aistudio.google.com. It uses Gemini's OpenAI-compatible API.",
+  custom: "Any server that speaks the OpenAI Chat Completions API and supports tool calling, e.g. Ollama, LM Studio, vLLM or OpenRouter. Small local models may struggle with exact edits.",
+};
+
+function selectedProvider() {
+  return settingsEls.grid.querySelector("input[name=provider]:checked")?.value ?? "claude-code";
+}
+function showProviderFields() {
+  const provider = selectedProvider();
+  for (const box of settingsEls.dialog.querySelectorAll(".prov-fields")) box.classList.toggle("active", box.dataset.for === provider);
+  settingsEls.effort.closest(".field").hidden = !["claude-code", "anthropic"].includes(provider);
+  settingsEls.note.textContent = PROVIDER_NOTES[provider];
+}
+function setStatus(kind, text) {
+  settingsEls.status.hidden = !text;
+  settingsEls.status.className = `settings-status ${kind}`;
+  settingsEls.status.textContent = text;
+}
+
+async function openSettings() {
+  const { settings } = await (await fetch("/api/settings")).json();
+  savedProvider = settings.provider;
+  clearedKeys = new Set();
+  settingsEls.grid.querySelector(`input[value="${settings.provider}"]`).checked = true;
+  settingsEls.effort.value = settings.effort;
+  for (const input of fieldInputs()) {
+    const values = settings[input.dataset.provider] ?? {};
+    if (input.dataset.field === "apiKey") {
+      input.value = "";
+      input.placeholder = values.apiKeySet ? `Saved (${values.apiKeyHint}). Leave blank to keep it.`
+        : input.dataset.provider === "anthropic" && values.envKey ? "Using ANTHROPIC_API_KEY from the environment" : "Paste your API key";
+    } else {
+      input.value = values[input.dataset.field] ?? "";
+    }
+  }
+  setStatus("", "");
+  showProviderFields();
+  settingsEls.dialog.showModal();
+}
+
+function collectDraft() {
+  const draft = { provider: selectedProvider(), effort: settingsEls.effort.value };
+  for (const input of fieldInputs()) {
+    draft[input.dataset.provider] ??= {};
+    let value = input.value.trim();
+    if (input.dataset.field === "apiKey" && !value && clearedKeys.has(input.dataset.provider)) value = null;
+    draft[input.dataset.provider][input.dataset.field] = value;
+  }
+  return draft;
+}
+
+async function postSettings(url) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: collectDraft() }) });
+  return { ok: res.ok, data: await res.json() };
+}
+
+settingsEls.btn.addEventListener("click", openSettings);
+settingsEls.cancel.addEventListener("click", () => settingsEls.dialog.close());
+settingsEls.grid.addEventListener("change", () => { setStatus("", ""); showProviderFields(); });
+settingsEls.dialog.addEventListener("click", async (e) => {
+  const clear = e.target.closest(".clear-key");
+  if (clear) {
+    const input = settingsEls.dialog.querySelector(`[data-provider="${clear.dataset.provider}"][data-field="apiKey"]`);
+    input.value = "";
+    input.placeholder = "Will be removed when you save";
+    clearedKeys.add(clear.dataset.provider);
+    return;
+  }
+  const load = e.target.closest(".load-models");
+  if (!load) return;
+  setStatus("busy", "Loading models…");
+  const { ok, data } = await postSettings("/api/settings/models");
+  if (!ok) return setStatus("err", data.error);
+  const list = document.getElementById(`models-${load.dataset.provider}`);
+  list.innerHTML = data.models.map((m) => `<option value="${m.replace(/"/g, "&quot;")}"></option>`).join("");
+  setStatus("", data.models.length ? `Found ${data.models.length} models. Click the Model box to pick one, or type a name.` : "The server didn't list any models. Type the model name.");
+  const input = settingsEls.dialog.querySelector(`[data-provider="${load.dataset.provider}"][data-field="model"]`);
+  input.focus();
+});
+settingsEls.test.addEventListener("click", async () => {
+  setStatus("busy", "Testing…");
+  const { ok, data } = await postSettings("/api/settings/test");
+  setStatus(ok ? "" : "err", ok ? `✓ ${data.message}` : data.error);
+});
+settingsEls.save.addEventListener("click", async () => {
+  const { ok, data } = await postSettings("/api/settings");
+  if (!ok) return setStatus("err", data.error ?? "Couldn't save settings.");
+  document.querySelector(".chat-sub").textContent = data.backend;
+  const changed = data.settings.provider !== savedProvider;
+  settingsEls.dialog.close();
+  refreshProjects();
+  // A chat stays on the provider it started with, so switching starts a new one.
+  if (changed && !state.streaming) {
+    newChat();
+    const note = document.createElement("div");
+    note.className = "resumed-note";
+    note.textContent = `Now using ${data.backend}. Earlier chats are still in History.`;
+    els.messages.appendChild(note);
+  }
 });
 
 // ---------- resizable panes ----------

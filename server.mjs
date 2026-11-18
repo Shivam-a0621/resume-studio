@@ -1,6 +1,7 @@
 // Resume Studio: live LaTeX resume editor with a Claude chat sidebar.
 import express from "express";
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI, { AzureOpenAI } from "openai";
 import { z } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -19,15 +20,106 @@ const expandHome = (p) => p.replace(/^~(?=$|\/)/, os.homedir());
 // The folder whose .tex files the app opens. Defaults to the bundled examples.
 const RESUME_ROOT = path.resolve(here, expandHome(process.env.RESUME_ROOT ?? localConfig.resumeRoot ?? "resumes"));
 const PORT = Number(process.env.PORT ?? 4321);
-const MODEL = process.env.RESUME_MODEL ?? "claude-opus-5-5";
-const EFFORT = process.env.RESUME_EFFORT ?? "medium";
 const MAX_TOOL_TURNS = 25;
-// "claude-code" runs your local Claude Code CLI on its own login; "api" calls the
-// Claude API with ANTHROPIC_API_KEY.
-const PROVIDER = process.env.RESUME_PROVIDER ?? (process.env.ANTHROPIC_API_KEY ? "api" : "claude-code");
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 
-const client = new Anthropic();
+// ---------- AI provider settings ----------
+// Chosen in the app's Settings dialog and saved to settings.local.json
+// (git-ignored, readable only by you). Environment variables are the defaults.
+
+const SETTINGS_FILE = path.resolve(here, process.env.RESUME_SETTINGS_FILE ?? "settings.local.json");
+const PROVIDERS = ["claude-code", "anthropic", "openai", "azure", "gemini", "custom"];
+const PROVIDER_LABELS = {
+  "claude-code": "local Claude Code", anthropic: "Claude API", openai: "OpenAI",
+  azure: "Azure OpenAI", gemini: "Gemini", custom: "OpenAI-compatible",
+};
+const SECRET_FIELDS = ["apiKey"];
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
+
+function defaultSettings() {
+  const envProvider = process.env.RESUME_PROVIDER === "api" ? "anthropic" : process.env.RESUME_PROVIDER;
+  return {
+    provider: PROVIDERS.includes(envProvider) ? envProvider : process.env.ANTHROPIC_API_KEY ? "anthropic" : "claude-code",
+    effort: process.env.RESUME_EFFORT ?? "medium",
+    "claude-code": { model: process.env.RESUME_MODEL ?? "" },
+    anthropic: { apiKey: "", model: process.env.RESUME_MODEL ?? "claude-opus-5-5" },
+    openai: { apiKey: "", model: "" },
+    azure: { apiKey: "", endpoint: "", deployment: "", apiVersion: "" },
+    gemini: { apiKey: "", model: "" },
+    custom: { baseURL: "", apiKey: "", model: "" },
+  };
+}
+
+let settingsCache = null;
+async function loadSettings() {
+  if (settingsCache) return settingsCache;
+  const saved = await fs.readFile(SETTINGS_FILE, "utf8").then(JSON.parse, () => ({}));
+  const merged = defaultSettings();
+  for (const key of Object.keys(merged)) {
+    if (saved[key] === undefined) continue;
+    merged[key] = typeof merged[key] === "object" ? { ...merged[key], ...saved[key] } : saved[key];
+  }
+  if (merged.provider === "api") merged.provider = "anthropic";
+  settingsCache = merged;
+  return merged;
+}
+
+// What the browser may see: secrets reduced to "is set" plus the last 4 characters.
+function publicSettings(settings) {
+  const out = structuredClone(settings);
+  for (const provider of PROVIDERS) {
+    for (const field of SECRET_FIELDS) {
+      if (out[provider]?.[field] === undefined) continue;
+      const value = settings[provider][field];
+      out[provider][field] = "";
+      out[provider][`${field}Set`] = Boolean(value);
+      out[provider][`${field}Hint`] = value ? `…${value.slice(-4)}` : "";
+    }
+  }
+  if (settings.provider === "anthropic") out.anthropic.envKey = Boolean(process.env.ANTHROPIC_API_KEY);
+  return out;
+}
+
+// Applies a draft from the browser. A blank secret keeps the saved one; null clears it.
+function mergeDraft(settings, draft) {
+  const next = structuredClone(settings);
+  if (PROVIDERS.includes(draft?.provider)) next.provider = draft.provider;
+  if (["low", "medium", "high", "xhigh", "max"].includes(draft?.effort)) next.effort = draft.effort;
+  for (const provider of PROVIDERS) {
+    const fields = draft?.[provider];
+    if (!fields || typeof fields !== "object") continue;
+    for (const [field, value] of Object.entries(fields)) {
+      if (!(field in next[provider])) continue;
+      if (SECRET_FIELDS.includes(field) && value === "") continue;
+      next[provider][field] = value === null ? "" : String(value).trim();
+    }
+  }
+  return next;
+}
+
+function modelLabel(settings) {
+  const s = settings[settings.provider];
+  const model = settings.provider === "azure" ? s.deployment : s.model;
+  return model ? `${PROVIDER_LABELS[settings.provider]} · ${model}` : PROVIDER_LABELS[settings.provider];
+}
+
+// OpenAI-format client for OpenAI, Azure OpenAI, Gemini and other compatible servers.
+function openAIClient(settings, provider = settings.provider) {
+  const s = settings[provider];
+  if (provider === "azure") {
+    if (!s.endpoint || !s.deployment || !s.apiVersion) throw new Error("Azure OpenAI needs an endpoint, a deployment name and an API version (Settings).");
+    return { client: new AzureOpenAI({ apiKey: s.apiKey || undefined, endpoint: s.endpoint, deployment: s.deployment, apiVersion: s.apiVersion }), model: s.deployment };
+  }
+  if (provider === "custom" && !s.baseURL) throw new Error("Enter the server's base URL in Settings.");
+  const baseURL = provider === "gemini" ? GEMINI_BASE_URL : provider === "custom" ? s.baseURL : undefined;
+  // Local servers such as Ollama accept any key.
+  const apiKey = s.apiKey || (provider === "custom" ? "not-needed" : undefined);
+  if (!apiKey && provider !== "openai") throw new Error(`Enter your ${PROVIDER_LABELS[provider]} API key in Settings.`);
+  return { client: new OpenAI({ apiKey, baseURL }), model: s.model };
+}
+
+const anthropicClient = (settings) => new Anthropic(settings.anthropic.apiKey ? { apiKey: settings.anthropic.apiKey } : {});
+
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(here, "public")));
@@ -63,9 +155,80 @@ function resolveTexPath(relPath) {
   return target;
 }
 
-app.get("/api/info", (_req, res) => {
-  res.json({ backend: PROVIDER === "claude-code" ? "local Claude Code" : `Claude API · ${MODEL}` });
+app.get("/api/info", async (_req, res) => {
+  const settings = await loadSettings();
+  res.json({ backend: modelLabel(settings), provider: settings.provider });
 });
+
+app.get("/api/settings", async (_req, res) => {
+  res.json({ settings: publicSettings(await loadSettings()) });
+});
+
+app.post("/api/settings", async (req, res) => {
+  const next = mergeDraft(await loadSettings(), req.body?.settings);
+  await fs.writeFile(SETTINGS_FILE, JSON.stringify(next, null, 2), { mode: 0o600 });
+  await fs.chmod(SETTINGS_FILE, 0o600).catch(() => {});
+  settingsCache = next;
+  res.json({ settings: publicSettings(next), backend: modelLabel(next) });
+});
+
+// Models the provider offers, for the model picker.
+app.post("/api/settings/models", async (req, res) => {
+  const settings = mergeDraft(await loadSettings(), req.body?.settings);
+  try {
+    let ids = [];
+    if (settings.provider === "anthropic") {
+      for await (const m of anthropicClient(settings).models.list()) ids.push(m.id);
+    } else if (["openai", "gemini", "custom"].includes(settings.provider)) {
+      const { client } = openAIClient(settings);
+      for await (const m of client.models.list()) ids.push(m.id.replace(/^models\//, ""));
+      // Hide models that can't chat (embeddings, speech, images, moderation).
+      ids = ids.filter((id) => !/embed|tts|whisper|dall-e|davinci|babbage|moderation|transcribe|image|audio|realtime|aqa|imagen|veo/i.test(id));
+    } else {
+      return res.json({ models: [] });
+    }
+    res.json({ models: [...new Set(ids)].sort() });
+  } catch (err) {
+    res.status(400).json({ error: describeProviderError(err, settings) });
+  }
+});
+
+// Checks the key and model with the cheapest call each provider allows.
+app.post("/api/settings/test", async (req, res) => {
+  const settings = mergeDraft(await loadSettings(), req.body?.settings);
+  try {
+    const p = settings.provider;
+    if (p === "claude-code") {
+      const { stdout } = await execFileAsync(CLAUDE_BIN, ["--version"]);
+      return res.json({ ok: true, message: `Found Claude Code ${stdout.trim()}. It uses your Claude Code login.` });
+    }
+    if (p === "anthropic") {
+      const model = await anthropicClient(settings).models.retrieve(settings.anthropic.model);
+      return res.json({ ok: true, message: `Connected. ${model.display_name ?? model.id} is available.` });
+    }
+    const { client, model } = openAIClient(settings);
+    if (!model) throw new Error("Choose a model first (try Load models).");
+    const reply = await client.chat.completions.create({ model, messages: [{ role: "user", content: "Reply with the single word OK." }] });
+    res.json({ ok: true, message: `Connected. ${model} replied: “${(reply.choices[0]?.message?.content ?? "").trim().slice(0, 40)}”` });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: describeProviderError(err, settings) });
+  }
+});
+
+function describeProviderError(err, settings) {
+  const name = PROVIDER_LABELS[settings.provider];
+  if (err?.code === "ENOENT") return `Couldn't find the "${CLAUDE_BIN}" command. Install Claude Code or set CLAUDE_BIN.`;
+  const status = err?.status;
+  if (status === 401 || status === 403 || err instanceof Anthropic.AuthenticationError || /authentication method|api key/i.test(err?.message ?? "")) {
+    return `${name} rejected the API key. Check it in Settings.`;
+  }
+  if (status === 404) return `${name} couldn't find that model or deployment. Check the name in Settings.`;
+  if (status === 429) return `${name} rate limit or quota reached. Wait a moment or check your plan.`;
+  if (err instanceof Anthropic.APIConnectionError || err instanceof OpenAI.APIConnectionError) {
+    return `Couldn't reach ${name}. Check your connection${settings.provider === "custom" || settings.provider === "azure" ? " and the URL" : ""}.`;
+  }
+  return err?.message ?? String(err);
+}
 
 app.get("/api/files", async (_req, res) => {
   const files = await listTexFiles(RESUME_ROOT);
@@ -134,7 +297,7 @@ async function loadProjects() {
 }
 
 app.get("/api/projects", async (_req, res) => {
-  res.json({ projects: await loadProjects(), supported: PROVIDER === "claude-code" });
+  res.json({ projects: await loadProjects(), supported: (await loadSettings()).provider === "claude-code" });
 });
 
 app.post("/api/projects", async (req, res) => {
@@ -283,7 +446,7 @@ async function getConversation(id, file) {
     title: saved?.title ?? "",
     createdAt: saved?.createdAt ?? Date.now(),
     updatedAt: saved?.updatedAt ?? Date.now(),
-    provider: saved?.provider ?? PROVIDER,
+    provider: saved?.provider === "api" ? "anthropic" : saved?.provider ?? (await loadSettings()).provider,
     messages: saved?.messages ?? [],
     seenTex: saved?.seenTex ?? null,
     sessionId: saved?.sessionId,
@@ -384,8 +547,11 @@ app.post("/api/chat", async (req, res) => {
 
   const convo = await getConversation(conversationId, file);
   if (convo.busy) return res.status(409).json({ error: "A reply is already in progress" });
-  if (convo.provider !== PROVIDER) {
-    return res.status(409).json({ error: "This chat was started with a different AI backend. Start a new chat." });
+  const current = (await loadSettings()).provider;
+  if (convo.provider !== current) {
+    return res.status(409).json({
+      error: `This chat was started with ${PROVIDER_LABELS[convo.provider] ?? convo.provider}, but Settings now use ${PROVIDER_LABELS[current]}. Start a new chat.`,
+    });
   }
   convo.busy = true;
   if (file) convo.file = file;
@@ -419,24 +585,56 @@ app.post("/api/chat", async (req, res) => {
   const abort = new AbortController();
   res.on("close", () => abort.abort());
 
-  if (PROVIDER === "claude-code") {
-    try {
-      await runClaudeCodeTurn({ convo, tex, selections, message, send, signal: abort.signal });
-    } catch (err) {
-      if (!abort.signal.aborted) send("error", { message: err.message });
-    } finally {
-      convo.busy = false;
-      send("done", {});
-      res.end();
-    }
-    return;
+  const settings = await loadSettings();
+  const turn = { convo, tex, selections, message, send, signal: abort.signal, settings };
+  try {
+    if (settings.provider === "claude-code") await runClaudeCodeTurn(turn);
+    else if (settings.provider === "anthropic") await runAnthropicTurn(turn);
+    else await runOpenAITurn(turn);
+  } catch (err) {
+    if (!abort.signal.aborted) send("error", { message: describeProviderError(err, settings) });
+  } finally {
+    convo.busy = false;
+    send("done", {});
+    res.end();
   }
+});
 
+// Runs one of the two resume tools against the working copy of the resume.
+async function runResumeTool(name, rawInput, state, send) {
+  if (name === "edit_resume") {
+    const input = EditInput.safeParse(rawInput);
+    if (!input.success) return { isError: true, content: "Invalid input: need old_string, new_string, summary." };
+    const { old_string, new_string, summary } = input.data;
+    const count = countOccurrences(state.working, old_string);
+    if (count !== 1) {
+      return { isError: true, content: count === 0 ? "old_string was not found in the current source" : `old_string matches ${count} times; include more surrounding text` };
+    }
+    const at = state.working.indexOf(old_string);
+    state.working = state.working.slice(0, at) + new_string + state.working.slice(at + old_string.length);
+    send("edit", { tex: state.working, at, length: new_string.length, summary });
+    return { isError: false, content: "Applied." };
+  }
+  if (name === "check_layout") {
+    send("status", { text: "Checking layout…" });
+    const result = await compileTex(state.working);
+    send("layout", { pages: result.pages, ok: result.ok });
+    return result.ok
+      ? { isError: false, content: `Compiled: ${result.pages} page(s), ${result.overfull} overfull line warning(s).` }
+      : { isError: true, content: `Compile failed:\n${result.errors}` };
+  }
+  return { isError: true, content: `Unknown tool ${name}` };
+}
+
+// ---------- Claude API backend ----------
+
+async function runAnthropicTurn({ convo, tex, selections, message, send, signal, settings }) {
+  const client = anthropicClient(settings);
   // On failure, roll history back so it never ends on an unanswered tool call.
   const historyLength = convo.messages.length;
   const messages = convo.messages;
   messages.push({ role: "user", content: buildUserContent(convo, tex, selections, message) });
-  let working = tex;
+  const state = { working: tex };
   let completed = false;
   let jsonRetries = 0;
 
@@ -444,18 +642,18 @@ app.post("/api/chat", async (req, res) => {
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
       const stream = client.beta.messages.stream(
         {
-          model: MODEL,
+          model: settings.anthropic.model || "claude-opus-5-5",
           max_tokens: 64000,
           betas: ["server-side-fallback-2026-07-01"],
           fallbacks: "default",
           thinking: { type: "adaptive" },
-          output_config: { effort: EFFORT },
+          output_config: { effort: settings.effort },
           cache_control: { type: "ephemeral" },
           system: systemPrompt("api"),
           tools: TOOLS,
           messages,
         },
-        { signal: abort.signal },
+        { signal },
       );
       stream.on("text", (delta) => send("text", { delta }));
 
@@ -467,7 +665,7 @@ app.post("/api/chat", async (req, res) => {
         // Retry only an unparseable streamed tool input. The SDK reports it as a
         // plain AnthropicError with this message; every other error propagates.
         const badToolJson = !(err instanceof Anthropic.APIError) && err?.message?.startsWith("Unable to parse tool parameter JSON");
-        if (!badToolJson || abort.signal.aborted || jsonRetries++ >= 2) throw err;
+        if (!badToolJson || signal.aborted || jsonRetries++ >= 2) throw err;
         send("status", { text: "Retrying a malformed tool call…" });
         continue;
       }
@@ -488,57 +686,93 @@ app.post("/api/chat", async (req, res) => {
 
       const results = [];
       for (const tool of toolUses) {
-        if (tool.name === "edit_resume") {
-          const input = EditInput.safeParse(tool.input);
-          if (!input.success) {
-            results.push({ type: "tool_result", tool_use_id: tool.id, is_error: true, content: "Invalid input: need old_string, new_string, summary." });
-            continue;
-          }
-          const { old_string, new_string, summary } = input.data;
-          const count = countOccurrences(working, old_string);
-          if (count !== 1) {
-            const why = count === 0 ? "old_string was not found in the current source" : `old_string matches ${count} times; include more surrounding text`;
-            results.push({ type: "tool_result", tool_use_id: tool.id, is_error: true, content: why });
-            continue;
-          }
-          const at = working.indexOf(old_string);
-          working = working.slice(0, at) + new_string + working.slice(at + old_string.length);
-          send("edit", { tex: working, at, length: new_string.length, summary });
-          results.push({ type: "tool_result", tool_use_id: tool.id, content: "Applied." });
-        } else if (tool.name === "check_layout") {
-          send("status", { text: "Checking layout…" });
-          const result = await compileTex(working);
-          send("layout", { pages: result.pages, ok: result.ok });
-          const report = result.ok
-            ? `Compiled: ${result.pages} page(s), ${result.overfull} overfull line warning(s).`
-            : `Compile failed:\n${result.errors}`;
-          results.push({ type: "tool_result", tool_use_id: tool.id, content: report, is_error: !result.ok });
-        } else {
-          results.push({ type: "tool_result", tool_use_id: tool.id, is_error: true, content: `Unknown tool ${tool.name}` });
-        }
+        const { isError, content } = await runResumeTool(tool.name, tool.input, state, send);
+        results.push({ type: "tool_result", tool_use_id: tool.id, content, ...(isError ? { is_error: true } : {}) });
       }
       messages.push({ role: "user", content: results });
       send("turn", {});
     }
-    if (completed) convo.seenTex = working;
+  } finally {
+    if (completed) convo.seenTex = state.working;
     else messages.length = historyLength;
-  } catch (err) {
-    messages.length = historyLength;
-    if (!abort.signal.aborted) {
-      let text = err.message;
-      if (err instanceof Anthropic.AuthenticationError || /authentication method/i.test(text)) {
-        text = "No valid Claude API key. Set ANTHROPIC_API_KEY, then restart the server.";
+  }
+}
+
+// ---------- OpenAI, Azure OpenAI, Gemini and OpenAI-compatible backends ----------
+
+const OPENAI_TOOLS = TOOLS.map((t) => ({
+  type: "function",
+  function: { name: t.name, description: t.description, parameters: t.input_schema },
+}));
+
+async function runOpenAITurn({ convo, tex, selections, message, send, signal, settings }) {
+  const { client, model } = openAIClient(settings);
+  if (!model) throw new Error(`Choose a ${PROVIDER_LABELS[settings.provider]} model in Settings.`);
+  const historyLength = convo.messages.length;
+  const messages = convo.messages;
+  messages.push({ role: "user", content: buildUserContent(convo, tex, selections, message) });
+  const state = { working: tex };
+  let completed = false;
+
+  try {
+    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      const stream = await client.chat.completions.create(
+        { model, stream: true, tools: OPENAI_TOOLS, messages: [{ role: "system", content: systemPrompt("api") }, ...messages] },
+        { signal },
+      );
+      let content = "";
+      const calls = [];
+      let finish = null;
+      for await (const chunk of stream) {
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        const delta = choice.delta ?? {};
+        if (delta.content) {
+          content += delta.content;
+          send("text", { delta: delta.content });
+        }
+        for (const call of delta.tool_calls ?? []) {
+          const index = call.index ?? calls.length;
+          calls[index] ??= { id: "", name: "", args: "" };
+          if (call.id) calls[index].id = call.id;
+          if (call.function?.name && !calls[index].name) calls[index].name = call.function.name;
+          if (call.function?.arguments) calls[index].args += call.function.arguments;
+        }
+        if (choice.finish_reason) finish = choice.finish_reason;
       }
-      else if (err instanceof Anthropic.RateLimitError) text = "Rate limited. Wait a moment and retry.";
-      else if (err instanceof Anthropic.APIConnectionError) text = "Couldn't reach the Claude API. Check your connection.";
-      send("error", { message: text });
+
+      if (finish === "content_filter") {
+        send("error", { message: `${PROVIDER_LABELS[settings.provider]} blocked this reply with its content filter.` });
+        break;
+      }
+      const toolCalls = calls.filter(Boolean).map((c, k) => ({
+        id: c.id || `call_${turn}_${k}`, type: "function", function: { name: c.name, arguments: c.args || "{}" },
+      }));
+      messages.push({ role: "assistant", content: content || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
+      if (!toolCalls.length) {
+        completed = true;
+        break;
+      }
+      if (finish === "length") throw new Error("The reply was cut off mid-edit. Try a smaller request.");
+
+      for (const call of toolCalls) {
+        let input;
+        try {
+          input = JSON.parse(call.function.arguments);
+        } catch {
+          messages.push({ role: "tool", tool_call_id: call.id, content: "Error: the arguments were not valid JSON. Try again." });
+          continue;
+        }
+        const { isError, content: result } = await runResumeTool(call.function.name, input, state, send);
+        messages.push({ role: "tool", tool_call_id: call.id, content: isError ? `Error: ${result}` : result });
+      }
+      send("turn", {});
     }
   } finally {
-    convo.busy = false;
-    send("done", {});
-    res.end();
+    if (completed) convo.seenTex = state.working;
+    else messages.length = historyLength;
   }
-});
+}
 
 // ---------- local Claude Code backend ----------
 
@@ -572,7 +806,7 @@ function describeEdit(oldText, newText) {
 
 const TOOL_STATUS = { Read: "Reading the resume…", Edit: "Editing…", Bash: "Checking layout…" };
 
-async function runClaudeCodeTurn({ convo, tex, selections, message, send, signal }) {
+async function runClaudeCodeTurn({ convo, tex, selections, message, send, signal, settings }) {
   await fs.mkdir(convo.workDir, { recursive: true });
   convo.sessionId ??= crypto.randomUUID();
   const file = path.join(convo.workDir, "resume.tex");
@@ -596,8 +830,8 @@ async function runClaudeCodeTurn({ convo, tex, selections, message, send, signal
     "--permission-mode", "dontAsk",
     "--setting-sources", "",
     "--strict-mcp-config",
-    "--effort", EFFORT,
-    ...(process.env.RESUME_MODEL ? ["--model", process.env.RESUME_MODEL] : []),
+    "--effort", settings.effort,
+    ...(settings["claude-code"].model ? ["--model", settings["claude-code"].model] : []),
     ...(convo.sessionStarted ? ["--resume", convo.sessionId] : ["--session-id", convo.sessionId]),
   ];
 
@@ -672,10 +906,8 @@ async function runClaudeCodeTurn({ convo, tex, selections, message, send, signal
 }
 
 
-app.listen(PORT, "127.0.0.1", () => {
+app.listen(PORT, "127.0.0.1", async () => {
   console.log(`Resume Studio running at http://localhost:${PORT}`);
   console.log(`Resume folder: ${RESUME_ROOT}`);
-  console.log(PROVIDER === "claude-code"
-    ? "AI backend: local Claude Code CLI (uses your Claude Code login)"
-    : `AI backend: Claude API (${MODEL})`);
+  console.log(`AI backend: ${modelLabel(await loadSettings())} (change it in Settings)`);
 });

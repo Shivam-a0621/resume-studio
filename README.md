@@ -1,13 +1,14 @@
 # Resume Studio
 
-A live LaTeX resume editor with an AI assistant beside it. Click a bullet, an entry, a section or any phrase on your resume, say what to change, and Claude rewrites the LaTeX while you watch. Every edit appears in the preview right away, recompiles to check the page count, and can be undone.
+A live LaTeX resume editor with an AI assistant beside it. Click a bullet, an entry, a section or any phrase on your resume, say what to change, and the AI rewrites the LaTeX while you watch. It works with Claude (your Claude Code login or an API key), OpenAI, Azure OpenAI, Google Gemini, or any OpenAI-compatible server such as Ollama or OpenRouter. Every edit appears in the preview right away, recompiles to check the page count, and can be undone.
 
 ![Resume Studio: chat on the left, live resume preview on the right](docs/screenshots/editor.png)
 
 ## Features
 
 - **Point at what to change.** Click a bullet, job entry, section title or table row, or drag across a phrase, and it's attached to your next message. Shift-click selects several things.
-- **Edits apply live.** Claude edits the `.tex` source through exact find-and-replace edits. Each change is highlighted in the preview and listed in the chat. Click a listed change to jump to it, and press Ctrl+Z to undo it.
+- **Use the AI you prefer.** Pick Claude Code, the Anthropic API, OpenAI, Azure OpenAI, Gemini, or any OpenAI-compatible server in **Settings**, enter a key, and choose a model from the provider's own list.
+- **Edits apply live.** The AI edits the `.tex` source through exact find-and-replace edits. Each change is highlighted in the preview and listed in the chat. Click a listed change to jump to it, and press Ctrl+Z to undo it.
 - **Stays one page.** The resume recompiles with `pdflatex` after every change, and a badge shows the page count. The assistant also compiles after edits that make the resume longer, and fixes any overflow.
 - **Honest writing rules.** The assistant leads bullets with impact, keeps the technical detail, and never invents numbers. When a stronger bullet needs a metric it doesn't have, it asks you or leaves a `[X%]` placeholder.
 - **Grounded in your real work.** Add a project folder and the assistant can read the code and git history, filtered to your own commits, to check your bullets and suggest claims backed by evidence. Access is read-only.
@@ -26,9 +27,10 @@ A live LaTeX resume editor with an AI assistant beside it. Click a bullet, an en
 
 - Node.js 20 or later
 - A TeX distribution with `pdflatex`, for example [TinyTeX](https://yihui.org/tinytex/) or TeX Live. The example resume uses `titlesec`, `enumitem`, `fontawesome5` and `tabularx`.
-- One of these for the AI:
-  - [Claude Code](https://claude.com/claude-code), installed and logged in (`claude` on your `PATH`). This is the default and uses your Claude subscription.
-  - An Anthropic API key in `ANTHROPIC_API_KEY`.
+- One of these for the AI, chosen in **Settings**:
+  - [Claude Code](https://claude.com/claude-code), installed and logged in (`claude` on your `PATH`). This is the default, uses your Claude subscription, and is the only option that can read project folders.
+  - An API key for Anthropic, OpenAI, Azure OpenAI or Google Gemini.
+  - An OpenAI-compatible server that supports tool calling: Ollama, LM Studio, vLLM, OpenRouter, and so on.
 
 **Run it**
 
@@ -60,6 +62,23 @@ Then open <http://localhost:4321>. It opens the bundled example resume in `resum
 
 Each chat is saved in `chats/` (git-ignored) with its transcript, the assistant's session, and the resume text the assistant last saw. **History** above the chat lists earlier chats, for the open resume or for all resumes. Click one to continue it; if it belongs to another resume, that file opens too. **New chat** starts fresh without deleting anything, and **×** in History deletes a chat. If you edited the resume since the chat's last message, the assistant is told so and re-reads it.
 
+### Choose an AI provider
+
+Click **Settings** above the chat.
+
+<img src="docs/screenshots/settings.png" alt="Settings dialog with provider choices" width="760">
+
+| Provider | What to enter |
+| --- | --- |
+| Claude Code | Nothing. It uses your local `claude` login. Optionally a model such as `sonnet`. |
+| Anthropic API | API key and model. If the key is blank, `ANTHROPIC_API_KEY` is used. |
+| OpenAI | API key, then **Load models** and pick one. |
+| Azure OpenAI | Endpoint, API key, deployment name and API version from your Azure resource. |
+| Google Gemini | API key from Google AI Studio, then **Load models**. It uses Gemini's OpenAI-compatible endpoint. |
+| OpenAI-compatible | Base URL (e.g. `http://localhost:11434/v1` for Ollama), key if needed, and a model. |
+
+**Test connection** checks the key and model before you save. Keys are stored only in `settings.local.json` next to `server.mjs`. That file is git-ignored and readable only by your user, and the browser only ever sees the last 4 characters of a key. Every provider gets the same two tools: `edit_resume`, an exact find-and-replace, and `check_layout`, which compiles and counts pages. So edits stream into the preview the same way whichever model you use. Switching providers starts a new chat; earlier chats stay in History.
+
 ### Let the assistant see your projects
 
 ![The assistant checks a project's code and git history, then grades each claim in a resume bullet](docs/screenshots/project-insights.png)
@@ -76,14 +95,15 @@ In the example above, the assistant checks a resume bullet against the project. 
 | --- | --- | --- |
 | `RESUME_ROOT` | `resumes/` | Folder whose `.tex` files the app opens. It's searched two levels deep. |
 | `PORT` | `4321` | HTTP port. The server only listens on `127.0.0.1`. |
-| `RESUME_PROVIDER` | `claude-code` without an API key, `api` with one | Which AI backend to use. |
-| `RESUME_EFFORT` | `medium` | Reasoning effort (`low` … `max`). Higher is more careful but slower. |
-| `RESUME_MODEL` | `claude-opus-5-5` for the API; Claude Code's own default otherwise | Model override. |
+| `RESUME_PROVIDER` | `claude-code`, or `anthropic` when `ANTHROPIC_API_KEY` is set | Default provider until you pick one in Settings (`claude-code`, `anthropic`, `openai`, `azure`, `gemini`, `custom`). |
+| `RESUME_EFFORT` | `medium` | Default reasoning effort for Claude (`low` … `max`). |
+| `RESUME_MODEL` | `claude-opus-5-5` for the Anthropic API; Claude Code's own default otherwise | Default Claude model. |
+| `RESUME_SETTINGS_FILE` | `settings.local.json` | Where provider settings and API keys are saved. |
 | `CLAUDE_BIN` | `claude` | Path to the Claude Code CLI. |
 | `RESUME_PROJECTS_FILE` | `projects.json` | Where the list of shared project folders is stored. |
 | `RESUME_CHATS_DIR` | `chats/` | Where saved chats and their working copies live. |
 
-You can also put settings in a git-ignored `config.local.json` next to `server.mjs`:
+Provider, key and model choices made in **Settings** override these defaults. You can also put the resume folder in a git-ignored `config.local.json` next to `server.mjs`:
 
 ```json
 { "resumeRoot": "~/Documents/resumes" }
@@ -103,14 +123,15 @@ browser (public/)                          server (server.mjs)
                                       │ Claude Code CLI (default)             │
                                       │   edits the chat's resume.tex copy,   │
                                       │   streamed back edit by edit          │
-                                      │ or the Claude API (@anthropic-ai/sdk) │
+                                      │ or an API: Anthropic, OpenAI, Azure,  │
+                                      │   Gemini, OpenAI-compatible, all with │
                                       │   edit_resume + check_layout tools    │
                                       └───────────────────────────────────────┘
 ```
 
 - **Preview and selection** (`public/latex.js`): a small LaTeX-to-HTML renderer. Every bullet, entry, section, block and table row it draws records the exact source range it came from, so a click maps to precise LaTeX that's sent to the assistant with your message.
 - **Claude Code backend** (default): each message runs `claude -p` with streaming JSON output in the chat's own folder under `chats/`, which holds a copy of `resume.tex`. The server watches its tool calls, re-reads the file after every `Edit`, and streams each change to the browser. Follow-up messages resume the same session.
-- **API backend**: a streaming tool-use loop on the Claude API with two tools. `edit_resume` makes an exact, unique find-and-replace, and `check_layout` compiles and reports the page count and errors. It uses adaptive thinking, prompt caching, and server-side refusal fallback.
+- **API backends**: a streaming tool-use loop with two tools. `edit_resume` makes an exact, unique find-and-replace, and `check_layout` compiles and reports the page count and errors. Claude uses the Anthropic SDK with adaptive thinking, prompt caching and server-side refusal fallback. OpenAI, Azure OpenAI, Gemini and compatible servers use the OpenAI SDK's Chat Completions API with function calling, and streamed tool-call fragments are reassembled before each edit runs.
 - **Compile**: `pdflatex -no-shell-escape` runs in a throwaway temp folder, so build files never land next to your resumes.
 
 ## Security model
@@ -129,13 +150,15 @@ It can't edit your project folders, read files outside them, or run other shell 
 ## Limitations
 
 - The preview is an approximation built for resume-style documents. Unusual packages or heavy custom macros may render roughly in the **Preview** tab. The **PDF** tab is always exact.
-- A saved chat continues on the AI backend it started with. After switching between Claude Code and the API, start a new chat.
+- A saved chat continues on the provider it started with. Switching providers in Settings starts a new chat.
+- Project folder access needs the Claude Code provider. The API providers only see the resume.
+- Small local models often have trouble making exact edits. Larger models work best.
 - Highly styled tables and multi-column grids can be harder for applicant tracking systems (ATS) to read than plain bullets.
 
 ## Project structure
 
 ```
-server.mjs              Express server: files, compile, chat (Claude Code CLI or Claude API)
+server.mjs              Express server: files, compile, settings, chat (Claude Code, Anthropic, OpenAI-format APIs)
 public/index.html       App shell
 public/app.js           UI: selection, chat streaming and history, undo/redo, files, layout
 public/latex.js         LaTeX → HTML renderer with source mapping
